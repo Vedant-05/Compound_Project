@@ -63,85 +63,85 @@ contract Compound_middleware {
         require(sent, "Failed to send Ether");
     }
 
-    // Borrow from compound
+    // borrow and payback //   
 
-    function borrowERC20(
-        address _token,
-        address _ctoken,
-        uint256 amount
-    ) external {
-        Comptroller comptroller = Comptroller(comptroller_address);
-        PriceFeed priceFeed = PriceFeed(pricefeed_address);
-        CErc20 ctoken = CErc20(_ctoken);
-        IERC20 token = IERC20(_token);
-        uint256 price = priceFeed.getUnderlyingPrice(_ctoken);
-        address[] memory cTokens = new address[](1);
-        cTokens[0] = _token;
-        uint256[] memory errors = comptroller.enterMarkets(cTokens);
-        require(errors[0] == 0, "Comptroller.enterMarkets failed.");
+    // enter market and borrow Erc20
+    function borrowErc20(address _tokenToBorrow, address _cTokenToBorrow, uint _decimals, uint _amount, address[] memory cTokens) external {
+        // enter market
+        // enter the supply market so you can borrow another type of asset
+        uint[] memory errors = comptroller.enterMarkets(cTokens);
+        for(uint i=0; i<errors.length; i++){
+            require(errors[i] == 0, "Comptroller.enterMarkets failed.");
+        }
 
-        (uint256 error2, uint256 liquidity, uint256 shortfall) = comptroller
-            .getAccountLiquidity(address(this));
-        require(error2 == 0, "Comptroller.getAccountLiquidity failed.");
-        require(shortfall == 0, "account underwater");
-        require(liquidity > 0, "account has excess collateral");
+        // check liquidity
+        (uint error, uint liquidity, uint shortfall) = comptroller.getAccountLiquidity(address(this));
+        require(error == 0, "error");
+        require(shortfall == 0, "shortfall > 0");
+        require(liquidity > 0, "liquidity = 0");
 
-        uint256 maxBorrow = (liquidity * (10**18)) / price;
-        require(maxBorrow > amount, "Can't borrow this much!");
+        CErc20 cToken = CErc20(_cTokenToBorrow);
+        IERC20Upgradeable token = IERC20Upgradeable(_tokenToBorrow);
 
-        require(ctoken.borrow(amount) == 0, "borrow failed!");
-        token.transfer(msg.sender, amount);
+        // calculate max borrow
+        uint price = priceFeed.getUnderlyingPrice(_cTokenToBorrow);
+        // liquidity - USD scaled up by 1e18
+        // price - USD scaled up by 1e18
+        // decimals - decimals of token to borrow
+        uint maxBorrow = (liquidity * (10**_decimals)) / price;
+
+        require(maxBorrow > _amount, "Can't borrow this much!");
+        require(cToken.borrow(_amount) == 0, "borrow failed");
+
+        token.safeTransfer(msg.sender, _amount);
     }
 
-    function borrowEth(
-        address _cEtherAddress,
-        address _cTokenAddress,
-        uint256 amount
-    ) public payable {
-        Comptroller comptroller = Comptroller(comptroller_address);
-        PriceFeed priceFeed = PriceFeed(pricefeed_address);
+    // enter market and borrow Ether
+    function borrowEth(address _cTokenToBorrow, uint _decimals, uint _amount, address[] memory cTokens) external payable {
+        // enter market
+        // enter the supply market so you can borrow another type of asset
+        uint[] memory errors = comptroller.enterMarkets(cTokens);
+        for(uint i=0; i<errors.length; i++){
+            require(errors[i] == 0, "Comptroller.enterMarkets failed.");
+        }
 
-        CEth cEth = CEth(_cEtherAddress);
+        // check liquidity
+        (uint error, uint liquidity, uint shortfall) = comptroller.getAccountLiquidity(address(this));
+        require(error == 0, "error");
+        require(shortfall == 0, "shortfall > 0");
+        require(liquidity > 0, "liquidity = 0");
 
-        uint256 price = priceFeed.getUnderlyingPrice(_cTokenAddress);
+        CEth cToken = CEth(_cTokenToBorrow);
 
-        address[] memory cTokens = new address[](1);
-        cTokens[0] = _cTokenAddress;
-        uint256[] memory errors = comptroller.enterMarkets(cTokens);
-        require(errors[0] == 0, "Comptroller.enterMarkets failed.");
-
-        (uint256 error2, uint256 liquidity, uint256 shortfall) = comptroller
-            .getAccountLiquidity(address(this));
-
-        require(error2 == 0, "Comptroller.getAccountLiquidity failed.");
-        require(shortfall == 0, "account underwater");
-        require(liquidity > 0, "account has excess collateral");
-
-        uint256 maxBorrow = (liquidity * (10**18)) / price;
-        require(maxBorrow > amount, "Can't borrow this much!");
-
-        require(cEth.borrow(amount) == 0, "borrow failed");
-        (bool sent, ) = msg.sender.call{value: address(this).balance}("");
+        // calculate max borrow
+        uint price = priceFeed.getUnderlyingPrice(_cTokenToBorrow);
+        // liquidity - USD scaled up by 1e18
+        // price - USD scaled up by 1e18
+        // decimals - decimals of token to borrow
+        uint maxBorrow = (liquidity * (10**_decimals)) / price;
+        require(maxBorrow > _amount, "Can't borrow this much!");
+        require(cToken.borrow(_amount) == 0, "borrow failed");
+        (bool sent,) = msg.sender.call{value: address(this).balance}("");
         require(sent, "Failed to borrow Ether");
     }
 
-    // Repay Borrow to compound
+    // payback Erc20
+    function paybackErc20(address _tokenBorrowed, address _cTokenBorrowed, uint _amount) external {
+        IERC20Upgradeable token = IERC20Upgradeable(_tokenBorrowed);
+        CErc20 cToken = CErc20(_cTokenBorrowed);
 
-    function paybackBorrowERC20(
-        address _ctoken,
-        address _token,
-        uint256 amount
-    ) external {
-        CErc20 ctoken = CErc20(_ctoken);
-        IERC20 token = IERC20(_token);
+        token.safeTransferFrom(msg.sender, address(this), _amount);
 
-        token.transferFrom(msg.sender, address(this), amount);
-        token.approve(_ctoken, amount);
-        require(ctoken.repayBorrow(amount) == 0, "repay borrow failed!");
+        token.safeApprove(_cTokenBorrowed, _amount);
+
+        require(cToken.repayBorrow(_amount) == 0, "repay failed");
     }
-
     function paybackborrowEth(address _ctoken) external payable {
         CEth cEth = CEth(_ctoken);
         cEth.repayBorrow{value: msg.value}();
+    }
+    // payback Ether
+    function paybackEth(address _cTokenBorrowed) external payable {
+        CEth(_cTokenBorrowed).repayBorrow{value : msg.value};
     }
 }
